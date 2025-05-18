@@ -6,7 +6,8 @@ import random
 from io import BytesIO
 
 # ---- Pin placement ----
-def place_pins(n_pins, radius=300, center=(300, 300)):
+def place_pins(n_pins, radius=280, center=(300, 300)):
+    """Place pins evenly around a circle."""
     angle = 2 * np.pi / n_pins
     return [
         (
@@ -17,16 +18,23 @@ def place_pins(n_pins, radius=300, center=(300, 300)):
     ]
 
 # ---- Line intensity function (with bounds check) ----
-def line_intensity(img, p1, p2, invert=True):
+def line_intensity(img, p1, p2):
+    """Calculate how well a line between two pins matches the target image.
+    Higher return value = better match to dark areas of the image."""
     h, w = img.shape
     # Get more points for better sampling
     num_samples = max(int(np.linalg.norm(np.array(p1) - np.array(p2))) * 2, 100)
     line_iter = np.linspace(p1, p2, num=num_samples).astype(int)
     line_iter[:, 0] = np.clip(line_iter[:, 0], 0, w - 1)
     line_iter[:, 1] = np.clip(line_iter[:, 1], 0, h - 1)
+    
+    # Get intensity values along the line
     intensities = img[line_iter[:, 1], line_iter[:, 0]]
-    # Return higher value for darker areas if invert is True
-    return np.mean(intensities) if not invert else 255 - np.mean(intensities)
+    
+    # For intensity, we want higher scores for darker pixels
+    # (0 = black, 255 = white in grayscale images)
+    # So we invert the values: darker pixels = higher score
+    return np.sum(255 - intensities) / len(intensities)
 
 def draw_line(canvas, p1, p2):
     return cv2.line(canvas, p1, p2, color=0, thickness=1)
@@ -63,37 +71,45 @@ with col2:
 preview_opacity = st.slider("Preview String Opacity (%)", 10, 100, 30, step=10)
 
 if uploaded_file:
+    # Load and process the image
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
     img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
     img = cv2.resize(img, (600, 600))
     
-    # Apply preprocessing to enhance the image
-    img = cv2.GaussianBlur(img, (5, 5), 0)  # Smooth the image
-    img = cv2.equalizeHist(img)  # Enhance contrast
+    # Display the original image
+    st.image(img, caption="Original Image", use_column_width=True)
     
-    # Create target image - darker areas should attract more strings
-    target = img.copy()  # We'll use original intensities
+    # Process the image to enhance contrast
+    processed_img = cv2.equalizeHist(img)  # Enhance contrast
+    processed_img = cv2.GaussianBlur(processed_img, (3, 3), 0)  # Slight blur to reduce noise
+    
+    # Create target image where darker pixels will attract more strings
+    target = processed_img.copy()
 
-    pins = place_pins(num_pins)
-    canvas = np.ones_like(target) * 255
-    sequence = []
-    current_pin = 0
+    # Draw the pin positions on the canvas before starting
+    pin_visualization = np.zeros((600, 600, 3), dtype=np.uint8)  # BGR format
     
-    # For displaying progress
-    col1, col2 = st.columns(2)
-    with col1:
-        progress_bar = st.progress(0)
-    with col2:
-        status_text = st.empty()
+    # Draw the circular boundary
+    cv2.circle(pin_visualization, (300, 300), 280, (50, 50, 50), 1)
+    
+    # Draw pins as small circles
+    for pin_idx, pin_pos in enumerate(pins):
+        cv2.circle(pin_visualization, pin_pos, 2, (0, 165, 255), -1)  # Orange dots
+        # Add pin numbers every 25 pins
+        if pin_idx % 25 == 0:
+            cv2.putText(pin_visualization, str(pin_idx), 
+                       (pin_pos[0] + 5, pin_pos[1] + 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1)
+    
+    st.image(pin_visualization, caption=f"Pin Configuration ({num_pins} pins)", use_column_width=True)
     
     # Keep track of recently used connections to avoid loops
     recent_connections = set()
-    connection_memory = 10  # How many recent connections to remember
+    connection_memory = num_pins // 4  # Remember more connections for better variety
     
-    # Keep track of used pixels to prevent overdrawing
-    used_mask = np.zeros_like(target)
-    weight_original = 1.0   # Weight for original image intensity
-    weight_unused = 0.5     # Weight for preferring unused pixels
+    # Keep track of total contributions per pixel to avoid oversaturation
+    contribution_map = np.zeros_like(target, dtype=np.float32)
+    max_contribution = 10.0  # Cap on how "used up" a pixel can be
 
     for i in range(num_connections):
         best_pin = None
@@ -108,21 +124,27 @@ if uploaded_file:
             connection = (current_pin, j)
             if connection in recent_connections:
                 continue
-                
-            # Calculate combined score from original image and unused pixels
-            original_score = line_intensity(target, pins[current_pin], pins[j], invert=True)
             
-            # Create a mask for this line
-            line_mask = np.zeros_like(used_mask)
+            # Create a mask for this line to evaluate contribution
+            line_mask = np.zeros_like(target, dtype=np.uint8)
             cv2.line(line_mask, pins[current_pin], pins[j], color=1, thickness=1)
             
-            # Calculate how much of this line passes through unused areas
-            unused_score = np.sum(line_mask * (1 - used_mask/255))
+            # Calculate the base intensity score from the image
+            # Higher score means line goes through darker areas of image
+            base_score = line_intensity(target, pins[current_pin], pins[j])
             
-            # Combined score with weights
-            score = (weight_original * original_score) + (weight_unused * unused_score)
-            
-            candidates.append((j, score))
+            # Calculate contribution score - prefer lines that go through less used areas
+            # Get current contribution values along the line
+            line_points = np.where(line_mask > 0)
+            if len(line_points[0]) > 0:
+                current_contributions = contribution_map[line_points]
+                # Less saturated areas get higher scores
+                contribution_score = np.sum(max_contribution - np.minimum(current_contributions, max_contribution))
+                
+                # Combined score - balance between matching image and using fresh areas
+                score = base_score * 0.7 + contribution_score * 0.3
+                
+                candidates.append((j, score))
             
         # Sort candidates by score
         candidates.sort(key=lambda x: x[1], reverse=True)
@@ -145,9 +167,14 @@ if uploaded_file:
         if len(recent_connections) > connection_memory:
             recent_connections.pop()
 
-        # Draw line on canvas and update used pixels mask
+        # Draw line on canvas and update contribution map
         draw_line(canvas, pins[current_pin], pins[best_pin])
-        cv2.line(used_mask, pins[current_pin], pins[best_pin], color=255, thickness=1)
+        
+        # Update the contribution map - mark this line as used
+        line_mask = np.zeros_like(target, dtype=np.uint8)
+        cv2.line(line_mask, pins[current_pin], pins[best_pin], color=1, thickness=1)
+        # Increment the contribution value along the line
+        contribution_map[line_mask > 0] += 1.0
         
         # Update progress
         progress_bar.progress((i + 1) / num_connections)
