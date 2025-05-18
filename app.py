@@ -6,8 +6,8 @@ from PIL import Image
 from io import BytesIO
 import cv2
 
-def image_to_string_art(image, pins, lines, radius=1.0):
-    """Convert image to string art using improved algorithm."""
+def image_to_string_art(image, pins, lines, radius=0.95):
+    """Convert image to string art using improved algorithm with OpenCV."""
     # Convert image to grayscale and resize
     img = np.array(image.convert('L'))
     img = cv2.resize(img, (300, 300))  # Fixed size for processing
@@ -22,7 +22,7 @@ def image_to_string_art(image, pins, lines, radius=1.0):
     h, w = img.shape
     pin_coords = []
     for x, y in zip(x_pins, y_pins):
-        # Map from circle (-1 to 1) to image coordinates (0 to w-1)
+        # Map from circle (-radius to radius) to image coordinates (0 to w-1)
         img_x = int((x + radius) * (w - 1) / (2 * radius))
         img_y = int((-y + radius) * (h - 1) / (2 * radius))
         pin_coords.append((img_x, img_y))
@@ -31,12 +31,11 @@ def image_to_string_art(image, pins, lines, radius=1.0):
     segments = []
     line_colors = []
     current_pin = 0
-    visited = np.zeros(img.shape, dtype=np.uint8)
+    visited = np.zeros(img.shape, dtype=np.float32)
     
     for _ in range(lines):
         best_next_pin = None
         best_score = -1
-        best_line_coords = []
         
         # Try several possible next pins
         for offset in range(1, min(pins//2, 100)):  # Limit search range
@@ -44,21 +43,23 @@ def image_to_string_art(image, pins, lines, radius=1.0):
             x1, y1 = pin_coords[current_pin]
             x2, y2 = pin_coords[next_pin]
             
-            # Get line coordinates (Bresenham's algorithm)
-            line_coords = list(zip(*line_aa(y1, x1, y2, x2)))
-            if not line_coords:
+            # Create blank image to draw line
+            line_img = np.zeros_like(img)
+            cv2.line(line_img, (x1, y1), (x2, y2), 255, 1)
+            
+            # Get coordinates where line exists
+            ys, xs = np.where(line_img > 0)
+            if len(ys) == 0:
                 continue
                 
             # Calculate score based on unvisited dark areas
-            score = 0
-            for y, x, a in line_coords:
-                if 0 <= y < h and 0 <= x < w:
-                    score += img[int(y), int(x)] * (1 - visited[int(y), int(x)])
+            values = img[ys, xs] * (1 - visited[ys, xs])
+            score = np.sum(values)
             
             if score > best_score:
                 best_score = score
                 best_next_pin = next_pin
-                best_line_coords = line_coords
+                best_line_coords = list(zip(ys, xs))
         
         if best_next_pin is None:
             break
@@ -69,62 +70,18 @@ def image_to_string_art(image, pins, lines, radius=1.0):
         segments.append([(x1, y1), (x2, y2)])
         
         # Mark visited pixels
-        for y, x, a in best_line_coords:
+        for y, x in best_line_coords:
             if 0 <= y < h and 0 <= x < w:
-                visited[int(y), int(x)] += 0.1
-                visited[int(y), int(x)] = min(1.0, visited[int(y), int(x)])
+                visited[y, x] += 0.1
+                visited[y, x] = min(1.0, visited[y, x])
         
         # Calculate line color based on average brightness
-        avg_brightness = np.mean([img[int(y), int(x)] for y, x, a in best_line_coords 
-                                if 0 <= y < h and 0 <= x < w]) / 255
+        avg_brightness = np.mean(img[ys, xs]) / 255 if len(ys) > 0 else 0
         line_colors.append((0, 0, 0, 1 - avg_brightness))
         
         current_pin = best_next_pin
     
     return segments, x_pins, y_pins, line_colors
-
-def line_aa(x0, y0, x1, y1):
-    """Generate anti-aliased line coordinates."""
-    # This is a simplified version - in production you'd use a proper AA line algorithm
-    # or import from skimage.draw
-    points = []
-    dx = abs(x1 - x0)
-    dy = abs(y1 - y0)
-    steep = dy > dx
-    if steep:
-        x0, y0 = y0, x0
-        x1, y1 = y1, x1
-    if x0 > x1:
-        x0, x1 = x1, x0
-        y0, y1 = y1, y0
-    dx = x1 - x0
-    dy = y1 - y0
-    gradient = dy / dx if dx != 0 else 1
-    
-    xend = round(x0)
-    yend = y0 + gradient * (xend - x0)
-    xgap = 1 - (x0 + 0.5) % 1
-    xpxl1 = xend
-    ypxl1 = int(yend)
-    points.append((ypxl1, xpxl1, 1 - (yend % 1) * xgap))
-    points.append((ypxl1 + 1, xpxl1, (yend % 1) * xgap))
-    
-    intery = yend + gradient
-    
-    xend = round(x1)
-    yend = y1 + gradient * (xend - x1)
-    xgap = (x1 + 0.5) % 1
-    xpxl2 = xend
-    ypxl2 = int(yend)
-    points.append((ypxl2, xpxl2, 1 - (yend % 1) * xgap))
-    points.append((ypxl2 + 1, xpxl2, (yend % 1) * xgap))
-    
-    for x in range(xpxl1 + 1, xpxl2):
-        points.append((int(intery), x, 1 - (intery % 1)))
-        points.append((int(intery) + 1, x, intery % 1))
-        intery += gradient
-    
-    return points
 
 def main():
     st.title("Improved Image to String Art Converter")
@@ -160,7 +117,7 @@ def main():
         # Generate string art
         with st.spinner('Generating string art...'):
             segments, x_pins, y_pins, line_colors = image_to_string_art(
-                processed_image, pins, lines, radius=0.95
+                processed_image, pins, lines
             )
         
         # Create plot
