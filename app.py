@@ -32,7 +32,7 @@ st.title("🧵 String Art Generator")
 
 uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
 num_pins = st.slider("Number of Pins", 50, 300, 200, step=10)
-num_connections = st.slider("Number of String Connections", 100, 3000, 1000, step=100)
+num_connections = st.slider("Number of String Connections", 500, 5000, 1000, step=100)
 
 if uploaded_file:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -63,14 +63,17 @@ if uploaded_file:
         draw_line(canvas, pins[current_pin], pins[best_pin])
         cv2.line(target, pins[current_pin], pins[best_pin], color=0, thickness=1)
 
-        sequence.append((current_pin, best_pin))
+        sequence.append(current_pin)
         current_pin = best_pin
         progress.progress((i + 1) / num_connections)
+    
+    # Add the final pin to complete the sequence
+    sequence.append(current_pin)
 
     st.image(canvas, caption="Generated String Art", use_column_width=True)
 
     st.markdown("### Pin Sequence")
-    sequence_text = "\n".join([f"{a} → {b}" for a, b in sequence])
+    sequence_text = ", ".join(map(str, sequence))
     st.text_area("Sequence", sequence_text, height=200)
 
     buffer = BytesIO()
