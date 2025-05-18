@@ -15,8 +15,15 @@ def place_pins(n_pins, radius=300, center=(300, 300)):
     ]
 
 def line_intensity(img, p1, p2):
-    line_iter = np.linspace(p1, p2, num=100).astype(int)
-    intensities = img[line_iter[:, 1], line_iter[:, 0]]
+    h, w = img.shape
+line_iter = np.linspace(p1, p2, num=100).astype(int)
+
+# Clamp values to valid image boundaries
+line_iter[:, 0] = np.clip(line_iter[:, 0], 0, w - 1)
+line_iter[:, 1] = np.clip(line_iter[:, 1], 0, h - 1)
+
+intensities = img[line_iter[:, 1], line_iter[:, 0]]
+
     return np.mean(intensities)
 
 def draw_line(canvas, p1, p2):
