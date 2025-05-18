@@ -18,13 +18,18 @@ with st.sidebar:
     
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
     
-    num_pins = st.slider("Number of pins", min_value=20, max_value=200, value=100, step=10)
+    num_pins = st.slider("Number of pins", min_value=20, max_value=400, value=180, step=20)
     
-    num_lines = st.slider("Number of lines", min_value=100, max_value=5000, value=1000, step=100)
+    num_lines = st.slider("Number of lines", min_value=100, max_value=10000, value=2000, step=100)
     
     pin_connection_method = st.selectbox(
         "Pin connection method",
         ["Greedy Algorithm", "Random Connections"]
+    )
+    
+    image_preprocessing = st.selectbox(
+        "Image preprocessing",
+        ["Normal", "High Contrast", "Edge Detection"]
     )
     
     line_color = st.color_picker("Line color", "#FFFFFF")
@@ -32,6 +37,11 @@ with st.sidebar:
     background_color = st.color_picker("Background color", "#000000")
     
     line_thickness = st.slider("Line thickness", min_value=1, max_value=5, value=1)
+    
+    advanced_options = st.expander("Advanced Options")
+    with advanced_options:
+        edge_threshold = st.slider("Edge Threshold", 0, 255, 100, help="For edge detection preprocessing")
+        contrast_factor = st.slider("Contrast Enhancement", 0.5, 3.0, 1.5, help="For high contrast preprocessing")
     
     if uploaded_file is not None:
         download_button = st.button("Generate String Art")
@@ -56,7 +66,7 @@ def get_pixel_intensity(img, x, y):
         return 255 - img[y, x]
     return 0
 
-def calculate_line_darkness(img, start, end, num_samples=20):
+def calculate_line_darkness(img, start, end, num_samples=50):
     """Calculate how much darkness a line would add."""
     x1, y1 = start
     x2, y2 = end
@@ -69,12 +79,20 @@ def calculate_line_darkness(img, start, end, num_samples=20):
         y = int((1 - t) * y1 + t * y2)
         points.append((x, y))
     
-    # Calculate the average darkness along the line
-    total_darkness = 0
+    # Calculate the weighted darkness along the line
+    # Prioritize points with higher darkness values for better feature representation
+    darkness_values = []
     for x, y in points:
-        total_darkness += get_pixel_intensity(img, x, y)
+        darkness_values.append(get_pixel_intensity(img, x, y))
     
-    return total_darkness / (num_samples + 1)
+    # Sort darkness values and give higher weight to the darker points (top 30%)
+    darkness_values.sort(reverse=True)
+    top_values = darkness_values[:int(len(darkness_values) * 0.3)]
+    
+    if not top_values:  # In case the list is empty
+        return 0
+        
+    return sum(top_values) / len(top_values)
 
 def greedy_string_art(img, pins, num_lines, current_canvas=None):
     """Generate string art connections using a greedy algorithm."""
@@ -88,27 +106,28 @@ def greedy_string_art(img, pins, num_lines, current_canvas=None):
     # Keep track of the lines we've added
     added_lines = set()
     
+    # Create a residual image that we'll update as we draw
+    residual_img = img.copy()
+    
     for _ in range(num_lines):
         best_darkness = -1
         best_connection = None
         
-        # Try a sample of possible connections to speed things up
-        sample_size = min(len(pins) * 20, len(pins) * (len(pins) - 1) // 2)
-        pin_indices = np.random.choice(len(pins), size=(sample_size, 2), replace=True)
-        
-        for i, j in pin_indices:
-            if i == j or (i, j) in added_lines or (j, i) in added_lines:
-                continue
+        # Try all possible connections (can be optimized for speed)
+        for i in range(len(pins)):
+            for j in range(i+1, len(pins)):
+                if (i, j) in added_lines or (j, i) in added_lines:
+                    continue
+                    
+                start = pins[i]
+                end = pins[j]
                 
-            start = pins[i]
-            end = pins[j]
-            
-            # Calculate how much darkness this line would add
-            darkness = calculate_line_darkness(img, start, end)
-            
-            if darkness > best_darkness:
-                best_darkness = darkness
-                best_connection = (i, j)
+                # Calculate how much darkness this line would add
+                darkness = calculate_line_darkness(residual_img, start, end)
+                
+                if darkness > best_darkness:
+                    best_darkness = darkness
+                    best_connection = (i, j)
         
         if best_connection:
             connections.append((pins[best_connection[0]], pins[best_connection[1]]))
@@ -117,48 +136,73 @@ def greedy_string_art(img, pins, num_lines, current_canvas=None):
             # Update the canvas by drawing this line
             cv2.line(current_canvas, pins[best_connection[0]], pins[best_connection[1]], 
                      color=255, thickness=1)
+            
+            # Subtract this line from the residual image (reduce the darkness along this line)
+            # This helps prevent overemphasizing the same areas and improves distribution
+            temp = np.zeros_like(residual_img)
+            cv2.line(temp, pins[best_connection[0]], pins[best_connection[1]], 
+                     color=30, thickness=2)
+            residual_img = cv2.subtract(residual_img, temp)
     
     return connections
 
 def random_string_art(img, pins, num_lines):
     """Generate string art connections using weighted random selection."""
     connections = []
+    residual_img = img.copy()
+    added_lines = set()
     
     # Create all possible pin pairs
-    pin_pairs = []
-    darkness_values = []
+    all_pairs = []
+    for i in range(len(pins)):
+        for j in range(i+1, len(pins)):
+            all_pairs.append((i, j))
     
-    # Sample a subset of pairs to speed up processing
-    sample_size = min(10000, len(pins) * (len(pins) - 1) // 2)
-    pin_indices = np.random.choice(len(pins), size=(sample_size, 2), replace=True)
-    
-    for i, j in pin_indices:
-        if i != j:
+    for _ in range(num_lines):
+        pin_pairs = []
+        darkness_values = []
+        
+        # Sample a subset of pairs to speed up processing
+        sample_size = min(1000, len(all_pairs))
+        sample_indices = np.random.choice(len(all_pairs), size=sample_size, replace=False)
+        
+        for idx in sample_indices:
+            i, j = all_pairs[idx]
+            if (i, j) in added_lines or (j, i) in added_lines:
+                continue
+                
             start = pins[i]
             end = pins[j]
-            darkness = calculate_line_darkness(img, start, end)
-            pin_pairs.append((start, end))
+            darkness = calculate_line_darkness(residual_img, start, end)
+            pin_pairs.append((i, j, start, end))
             darkness_values.append(darkness)
-    
-    # Convert to numpy array and normalize
-    darkness_values = np.array(darkness_values)
-    if darkness_values.sum() > 0:  # Avoid division by zero
-        probs = darkness_values / darkness_values.sum()
         
-        # Randomly select connections based on darkness
-        chosen_indices = np.random.choice(
-            len(pin_pairs), 
-            size=min(num_lines, len(pin_pairs)), 
-            replace=False, 
-            p=probs
-        )
-        
-        for idx in chosen_indices:
-            connections.append(pin_pairs[idx])
+        # If no valid pairs left, break
+        if not darkness_values:
+            break
+            
+        # Convert to numpy array and normalize
+        darkness_values = np.array(darkness_values)
+        if darkness_values.sum() > 0:  # Avoid division by zero
+            # Use a power function to emphasize the differences
+            darkness_values = darkness_values ** 2
+            probs = darkness_values / darkness_values.sum()
+            
+            # Randomly select a connection based on darkness
+            chosen_idx = np.random.choice(len(pin_pairs), p=probs)
+            i, j, start, end = pin_pairs[chosen_idx]
+            
+            connections.append((start, end))
+            added_lines.add((i, j))
+            
+            # Subtract this line from the residual image
+            temp = np.zeros_like(residual_img)
+            cv2.line(temp, start, end, color=30, thickness=2)
+            residual_img = cv2.subtract(residual_img, temp)
     
     return connections
 
-def preprocess_image(uploaded_file, size=500):
+def preprocess_image(uploaded_file, size=500, preprocessing_method="Normal", edge_threshold=100, contrast_factor=1.5):
     """Preprocess the uploaded image."""
     # Read image
     image = Image.open(uploaded_file)
@@ -178,6 +222,16 @@ def preprocess_image(uploaded_file, size=500):
     
     # Convert to numpy array
     img_array = np.array(image)
+    
+    # Apply different preprocessing based on selected method
+    if preprocessing_method == "High Contrast":
+        # Enhance contrast
+        img_array = cv2.convertScaleAbs(img_array, alpha=contrast_factor, beta=0)
+        img_array = cv2.equalizeHist(img_array)
+    elif preprocessing_method == "Edge Detection":
+        # Apply edge detection
+        img_array = cv2.GaussianBlur(img_array, (5, 5), 0)
+        img_array = cv2.Canny(img_array, edge_threshold, edge_threshold * 2)
     
     # Apply circular mask
     mask = np.zeros_like(img_array)
@@ -213,7 +267,15 @@ with col2:
     if uploaded_file is not None and download_button:
         with st.spinner("Generating string art..."):
             # Process image
-            processed_img = preprocess_image(uploaded_file)
+            processed_img = preprocess_image(
+                uploaded_file, 
+                preprocessing_method=image_preprocessing,
+                edge_threshold=edge_threshold,
+                contrast_factor=contrast_factor
+            )
+            
+            # Display processed image in a small corner
+            st.image(processed_img, caption="Processed Image", width=200)
             
             # Create pins
             radius = processed_img.shape[0] // 2
@@ -236,7 +298,7 @@ with col2:
             ax.set_facecolor(bg_rgb_norm)
             
             # Draw pins and connections
-            circle = plt.Circle((radius, radius), radius, fill=False, color='gray', alpha=0.5)
+            circle = plt.Circle((radius, radius), radius, fill=False, color='gray', alpha=0.2)
             ax.add_patch(circle)
             
             # Draw the strings
@@ -247,28 +309,43 @@ with col2:
                 ax.plot([start[0], end[0]], [start[1], end[1]], 
                        color=line_rgb_norm, 
                        linewidth=line_thickness, 
-                       alpha=0.6)
+                       alpha=0.8)
             
             # Set limits and remove axes
             ax.set_xlim(0, processed_img.shape[1])
-            ax.set_ylim(0, processed_img.shape[0])
+            ax.set_ylim(processed_img.shape[0], 0)  # Invert y-axis to match image coordinates
             ax.set_aspect('equal')
             ax.axis('off')
             
             # Display the result
             st.pyplot(fig)
             
-            # Create download button for SVG
+            # Create download buttons
             svg_buffer = download_svg(fig)
             svg_bytes = svg_buffer.getvalue()
             b64 = base64.b64encode(svg_bytes).decode()
             href = f'data:image/svg+xml;base64,{b64}'
-            st.download_button(
-                label="Download SVG",
-                data=svg_bytes,
-                file_name="string_art.svg",
-                mime="image/svg+xml"
-            )
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    label="Download SVG",
+                    data=svg_bytes,
+                    file_name="string_art.svg",
+                    mime="image/svg+xml"
+                )
+            
+            # Save as PNG also
+            png_buffer = io.BytesIO()
+            fig.savefig(png_buffer, format='png', dpi=300, bbox_inches='tight')
+            png_buffer.seek(0)
+            with col2:
+                st.download_button(
+                    label="Download PNG",
+                    data=png_buffer,
+                    file_name="string_art.png",
+                    mime="image/png"
+                )
 
 # Show instructions if no image is uploaded
 if uploaded_file is None:
