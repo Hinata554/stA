@@ -31,6 +31,24 @@ def line_intensity(img, p1, p2, invert=True):
 def draw_line(canvas, p1, p2):
     return cv2.line(canvas, p1, p2, color=0, thickness=1)
 
+def apply_opacity(image, opacity_percent):
+    """Adjust the opacity of strings in the image"""
+    # Convert opacity percentage to a value between 0-255
+    opacity_value = int((opacity_percent / 100) * 255)
+    
+    # Create a black background
+    background = np.zeros_like(image)
+    
+    # Blend the strings with the background based on opacity
+    # For white strings on black background: reduce white intensity
+    result = background.copy()
+    # Find all non-black pixels (string pixels)
+    string_mask = image < 255
+    # Set those pixels to the opacity value
+    result[string_mask] = opacity_value
+    
+    return result
+
 # ---- Streamlit App UI ----
 st.title("🧵 String Art Generator")
 
@@ -40,6 +58,9 @@ with col1:
     num_pins = st.slider("Number of Pins", 50, 300, 200, step=10)
 with col2:
     num_connections = st.slider("Number of String Connections", 500, 5000, 1000, step=100)
+
+# Preview opacity setting
+preview_opacity = st.slider("Preview String Opacity (%)", 10, 100, 30, step=10)
 
 if uploaded_file:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
@@ -135,7 +156,9 @@ if uploaded_file:
             # Preview the result every 50 iterations
             if i % 500 == 0 and i > 0:
                 preview = 255 - canvas.copy()
-                st.image(preview, caption=f"Preview after {i+1} strings", use_column_width=True)
+                # Apply opacity to the preview image
+                preview_with_opacity = apply_opacity(preview, preview_opacity)
+                st.image(preview_with_opacity, caption=f"Preview after {i+1} strings", use_column_width=True)
 
         sequence.append(current_pin)
         current_pin = best_pin
@@ -145,9 +168,15 @@ if uploaded_file:
     sequence.append(current_pin)
 
     # Invert the canvas to show black background with white lines
-    canvas = 255 - canvas
+    final_image = 255 - canvas
     
-    st.image(canvas, caption="Generated String Art", use_column_width=True)
+    # Apply opacity to the final result
+    final_image_with_opacity = apply_opacity(final_image, preview_opacity)
+    
+    st.image(final_image_with_opacity, caption="Generated String Art", use_column_width=True)
+    
+    # Also provide the full opacity version for download
+    st.image(final_image, caption="Generated String Art (100% Opacity)", use_column_width=True)
 
     st.markdown("### Pin Sequence")
     sequence_text = ", ".join(map(str, sequence))
