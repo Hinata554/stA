@@ -4,6 +4,7 @@ import cv2
 import math
 from io import BytesIO
 
+# ---- Pin placement ----
 def place_pins(n_pins, radius=300, center=(300, 300)):
     angle = 2 * np.pi / n_pins
     return [
@@ -14,21 +15,19 @@ def place_pins(n_pins, radius=300, center=(300, 300)):
         for i in range(n_pins)
     ]
 
+# ---- Line intensity function (with bounds check) ----
 def line_intensity(img, p1, p2):
     h, w = img.shape
-line_iter = np.linspace(p1, p2, num=100).astype(int)
-
-# Clamp values to valid image boundaries
-line_iter[:, 0] = np.clip(line_iter[:, 0], 0, w - 1)
-line_iter[:, 1] = np.clip(line_iter[:, 1], 0, h - 1)
-
-intensities = img[line_iter[:, 1], line_iter[:, 0]]
-
+    line_iter = np.linspace(p1, p2, num=100).astype(int)
+    line_iter[:, 0] = np.clip(line_iter[:, 0], 0, w - 1)
+    line_iter[:, 1] = np.clip(line_iter[:, 1], 0, h - 1)
+    intensities = img[line_iter[:, 1], line_iter[:, 0]]
     return np.mean(intensities)
 
 def draw_line(canvas, p1, p2):
     return cv2.line(canvas, p1, p2, color=255, thickness=1)
 
+# ---- Streamlit App UI ----
 st.title("🧵 String Art Generator")
 
 uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
