@@ -2,6 +2,7 @@ import streamlit as st
 import numpy as np
 import cv2
 import math
+import random
 from io import BytesIO
 
 # ---- Pin placement ----
@@ -45,20 +46,50 @@ if uploaded_file:
     canvas = np.ones_like(target) * 255
     sequence = []
     current_pin = 0
+    
+    # Keep track of recently used connections to avoid loops
+    recent_connections = set()
+    connection_memory = 10  # How many recent connections to remember
 
     progress = st.progress(0)
 
     for i in range(num_connections):
         best_pin = None
         best_score = -1
+        candidates = []
 
         for j in range(num_pins):
             if j == current_pin:
                 continue
+                
+            # Check if this connection was recently used
+            connection = (current_pin, j)
+            if connection in recent_connections:
+                continue
+                
             score = line_intensity(target, pins[current_pin], pins[j])
-            if score > best_score:
-                best_score = score
-                best_pin = j
+            candidates.append((j, score))
+            
+        # Sort candidates by score
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        # Choose from top candidates to avoid getting stuck
+        if candidates:
+            # Take one of the top 3 candidates (or fewer if less available)
+            top_n = min(3, len(candidates))
+            idx = random.randint(0, top_n-1)
+            best_pin = candidates[idx][0]
+        else:
+            # If no candidates, choose a random pin as fallback
+            best_pin = random.choice([p for p in range(num_pins) if p != current_pin])
+        
+        # Add this connection to recent memory
+        connection = (current_pin, best_pin)
+        recent_connections.add(connection)
+        
+        # Remove oldest connection if we're over the limit
+        if len(recent_connections) > connection_memory:
+            recent_connections.pop()
 
         draw_line(canvas, pins[current_pin], pins[best_pin])
         cv2.line(target, pins[current_pin], pins[best_pin], color=0, thickness=1)
