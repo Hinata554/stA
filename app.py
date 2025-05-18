@@ -1,76 +1,95 @@
 import streamlit as st
 import numpy as np
-import cv2
-from io import BytesIO
+import io
+import base64
+from PIL import Image, ImageDraw
 
-def place_pins(n_pins, radius=300, center=(300, 300)):
-    angle = 2 * np.pi / n_pins
-    return [
-        (
-            int(center[0] + radius * np.cos(i * angle)),
-            int(center[1] + radius * np.sin(i * angle))
-        )
-        for i in range(n_pins)
-    ]
+def generate_string_art(pins_count, lines_count, sequence, image_size=500):
+    """
+    Generates string art based on a given sequence, within a circular arrangement of pins.
 
-def line_intensity(img, p1, p2):
-    h, w = img.shape
-    line_iter = np.linspace(p1, p2, num=100).astype(int)
-    line_iter[:, 0] = np.clip(line_iter[:, 0], 0, w - 1)
-    line_iter[:, 1] = np.clip(line_iter[:, 1], 0, h - 1)
-    intensities = img[line_iter[:, 1], line_iter[:, 0]]
-    return np.mean(intensities)
+    Args:
+        pins_count (int): The number of pins on the circle's circumference.
+        lines_count (int): The number of lines to draw.
+        sequence (list of int): The sequence of pin connections.
+        image_size (int, optional): The size of the output image (square). Defaults to 500.
 
-def draw_line(canvas, p1, p2):
-    cv2.line(canvas, p1, p2, color=0, thickness=1)  # black line
+    Returns:
+        Image.Image: A PIL Image object containing the generated string art.
+    """
+    # Input validation
+    if not isinstance(pins_count, int) or pins_count <= 1:
+        raise ValueError("pins_count must be an integer greater than 1")
+    if not isinstance(lines_count, int) or lines_count <= 0:
+        raise ValueError("lines_count must be a positive integer")
+    if not isinstance(sequence, list) or not all(isinstance(x, int) for x in sequence):
+        raise ValueError("sequence must be a list of integers")
+    if not all(0 <= pin_index < pins_count for pin_index in sequence):
+        raise ValueError("All elements in sequence must be valid pin indices (0 to pins_count-1)")
+    if len(sequence) != lines_count + 1:
+        raise ValueError("Length of sequence must be lines_count + 1")
+    if not isinstance(image_size, int) or image_size <= 0:
+        raise ValueError("image_size must be a positive integer")
+    # Calculate pin positions on the circle
+    radius = image_size / 2 - 10  # Leave some margin
+    center_x = image_size / 2
+    center_y = image_size / 2
+    pin_positions = []
+    for i in range(pins_count):
+        angle = (2 * np.pi / pins_count) * i
+        x = center_x + radius * np.cos(angle)
+        y = center_y + radius * np.sin(angle)
+        pin_positions.append((x, y))
 
-st.title("🧵 String Art Generator (Black String on White)")
+    # Create a new image
+    img = Image.new('RGB', (image_size, image_size), color='black')
+    draw = ImageDraw.Draw(img)
 
-uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
-num_pins = st.slider("Number of Pins", 50, 300, 200, step=10)
-num_connections = st.slider("Number of String Connections", 500, 5000, 1000, step=100)
+    # Draw the lines based on the sequence
+    for i in range(lines_count):
+        start_pin_index = sequence[i]
+        end_pin_index = sequence[i + 1]
+        start_pos = pin_positions[start_pin_index]
+        end_pos = pin_positions[end_pin_index]
+        draw.line((start_pos, end_pos), fill='white', width=1)
 
-if uploaded_file:
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, cv2.IMREAD_GRAYSCALE)
-    img = cv2.resize(img, (600, 600))
+    return img
 
-    # Blur the image to smooth edges
-    target = cv2.GaussianBlur(img, (7, 7), 0)
+def main():
+    """
+    Main function to run the Streamlit app.
+    """
+    st.title("Circular String Art Generator")
 
-    pins = place_pins(num_pins)
-    canvas = np.ones_like(target) * 255  # white background
-    sequence = [0]
-    current_pin = 0
+    # Sidebar for parameters
+    pins_count = st.sidebar.number_input("Number of Pins:", min_value=2, max_value=200, value=20, step=1)
+    lines_count = st.sidebar.number_input("Number of Lines:", min_value=1, max_value=1000, value=50, step=1)
+    sequence_input = st.sidebar.text_area("Sequence (comma-separated pin indices):", "0, 5, 10, 15, 2, 7")
+    image_size = st.sidebar.number_input("Image Size:", min_value=200, max_value=1000, value=500, step=50)
 
-    progress = st.progress(0)
+    if st.sidebar.button("Generate String Art"):
+        try:
+            # Parse the sequence from the text input
+            sequence = [int(x.strip()) for x in sequence_input.split(',')]
+            if len(sequence) != lines_count + 1:
+                st.error(f"Error: The sequence must contain 'Number of Lines + 1' values. Expected {lines_count + 1}, got {len(sequence)}.")
+                return
 
-    for i in range(num_connections):
-        best_pin = None
-        best_score = 255  # looking for darkest line (lowest average intensity)
+            # Generate the string art
+            img = generate_string_art(pins_count, lines_count, sequence, image_size)
 
-        for j in range(num_pins):
-            if j == current_pin:
-                continue
-            score = line_intensity(target, pins[current_pin], pins[j])
-            if score < best_score:
-                best_score = score
-                best_pin = j
+            # Display the image
+            st.image(img, caption="Generated String Art", use_column_width=True)
 
-        draw_line(canvas, pins[current_pin], pins[best_pin])
-        cv2.line(target, pins[current_pin], pins[best_pin], color=255, thickness=1)  # whiten used region
+            # Provide a download link for the image
+            buffered = io.BytesIO()
+            img.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            href = f'<a href="data:image/png;base64,{img_str}" download="string_art.png">Download Image</a>'
+            st.markdown(href, unsafe_allow_html=True)
 
-        sequence.append(best_pin)
-        current_pin = best_pin
-        progress.progress((i + 1) / num_connections)
+        except ValueError as e:
+            st.error(f"Error: {e}")
 
-    st.image(canvas, caption="🧵 Final String Art", use_column_width=True)
-
-    st.markdown("### Pin Sequence")
-    sequence_text = ", ".join(str(x) for x in sequence)
-    st.text_area("Sequence", sequence_text, height=200)
-
-    buffer = BytesIO()
-    buffer.write(sequence_text.encode())
-    buffer.seek(0)
-    st.download_button("Download Sequence", buffer, file_name="string_art_sequence.txt", mime="text/plain")
+if __name__ == "__main__":
+    main()
