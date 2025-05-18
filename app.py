@@ -26,7 +26,7 @@ def line_intensity(img, p1, p2):
     return np.mean(intensities)
 
 def draw_line(canvas, p1, p2):
-    return cv2.line(canvas, p1, p2, color=255, thickness=1)
+    return cv2.line(canvas, p1, p2, color=0, thickness=1)
 
 # ---- Streamlit App UI ----
 st.title("🧵 String Art Generator")
@@ -101,6 +101,9 @@ if uploaded_file:
     # Add the final pin to complete the sequence
     sequence.append(current_pin)
 
+    # Invert the canvas to show black background with white lines
+    canvas = 255 - canvas
+    
     st.image(canvas, caption="Generated String Art", use_column_width=True)
 
     st.markdown("### Pin Sequence")
